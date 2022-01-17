@@ -1,3 +1,4 @@
+from re import X
 import streamlit as st
 import os
 import datetime
@@ -15,7 +16,9 @@ class SARVEILLANCE():
   def __init__(self):
     self.gee = gee
     self.bases = []
-    self.poi = None
+    self.poi = {}
+    self.start_date = None
+    self.end_date = None
     self.imagery = None
     # ugly attempt to get the data folder path
     self.outpath = os.path.abspath(os.path.join(__file__, '..', '..', 'data'))
@@ -23,7 +26,7 @@ class SARVEILLANCE():
 
   def run(self):
     self.setup_gee()
-    self.load_bases()
+    self.bases = self.load_bases()
     self.init_imagery()
     self.init_gui()
 
@@ -31,43 +34,67 @@ class SARVEILLANCE():
     # self.gee.ee.Authenticate()
     self.gee.ee_initialize()
 
-
+  @st.cache
   def load_bases(self):
-    # load csv data with places of interest
-    self.bases = pd.read_csv("poi/poi_df.csv")
+    '''
+    Loads the base data into a pandas dataframe
+    Uses st.cache (with disabled warning) to only load once
+    '''
+    return pd.read_csv("poi/poi_df.csv")
 
   def init_imagery(self):
     self.imagery = Imagery()
     self.imagery.get_collection()
 
-  def create_poi(self, type, name, start_date, end_date, lat=None, lon=None):
-    if type == 'preset':
-      poi_data = self.bases.loc[self.bases['Name'] == name]
-      self.poi = {
-        'name': name,
-        'lat': poi_data['lat'].values[0],
-        'lon': poi_data['lon'].values[0],
-        'start_date': start_date,
-        'end_date': end_date
-      }
-    elif type == 'custom':
-      try:
-        float(lat)
-        float(lon)
-      except ValueError:
-        st.error('Latitude & Longitude must be numeric values!')
-        st.stop()
-      self.poi = {
-        'name': name,
-        'lat': float(lat),
-        'lon': float(lon),
-        'start_date': start_date,
-        'end_date': end_date
-      }
-    else:
-      st.error('Error')
+  def is_name_in_preset(self, name):
+    '''
+    checks if <name> is in the poi dataframe
+    '''
+    check = self.bases.loc[self.bases['Name'] == name]
+    return not check.empty
 
+  def get_preset_from_name(self, name):
+    preset_data = self.bases.loc[self.bases['Name'] == name]
+    if not preset_data.empty:
+      name = preset_data['Name'].values[0]
+      lat = preset_data['lat'].values[0]
+      lon = preset_data['lon'].values[0]
+      return (False, (name, lat, lon))
+    else:
+      return (True, 'Location not found in preset data')
+
+  def generate_poi(self, state):
+    error = False # default
+    msg = ''
+    needed_fields = ['name', 'lat', 'lon', 'start_date', 'end_date']
+    for field in needed_fields:
+      if state[field] and state[field] != '':
+        self.poi[field] = state[field]
+        # special stuff
+        if field == 'lat' or field == 'lon':
+          try:
+            float(state[field])
+          except ValueError:
+            error = True
+            msg = 'Latitude & Longitude must be numeric values!'
+            break
+          else:
+            self.poi[field] = float(state[field])
+        if field == 'start_date' or field == 'end_date':
+          self.poi[field] = state[field].isoformat()
+      else:
+        error = True
+        msg = 'Choose a location!'
+        break
+
+    return (error, msg)
+
+  # @st.cache(suppress_st_warning=True)
   def load_custom_css(self):
+    '''
+    Loads the custom css and inserts the style into the page
+    Uses st.cache (with disabled warning) to only load once
+    '''
     with open('app/custom.css') as f:
       st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
@@ -83,53 +110,103 @@ class SARVEILLANCE():
     st.title('SARveillance')
     st.subheader('Sentinel-1 SAR time series analysis for OSINT use')
 
-    # preset poi select (form element)
-    preset_name = st.selectbox('Which location would you like to examine?', poi_list, key='poi_select')
+    # Initialization of session state
+    if 'name' not in st.session_state:
+      st.session_state.name = ''
+    if 'lat' not in st.session_state:
+      st.session_state.lat = '' # default location
+    if 'lon' not in st.session_state:
+      st.session_state.lon = '' # default location
+    if 'is_custom' not in st.session_state:
+      st.session_state.is_custom = False
+    if 'inputs_disabled' not in st.session_state:
+      st.session_state.inputs_disabled = True
+    if 'map' not in st.session_state:
+      st.session_state.map = 'init'
+    if 'allow_click' not in st.session_state:
+      st.session_state.allow_click = False
 
-    # expander with a map to pick coordinates and to enter a custom name
-    with st.expander("Custom Location (overrides a selected location)"):
-      # columns with inputs for name, lat & lon
-      col_custom_name, col_lat, col_lon = st.columns(3)
-      with col_custom_name:
-        custom_name = st.text_input('Location name', '', placeholder='custom name')
-      with col_lat:
-        lat_input = st.empty()
-        lat = lat_input.text_input('Latitude (enter or click map)', '', placeholder='latitude')
-      with col_lon:
-        lon_input = st.empty()
-        lon = lon_input.text_input('Longitude (enter or click map)', '', placeholder='longitude')
+    # preset poi on change
+    def on_select():
+      (err, msg) = self.get_preset_from_name(st.session_state.poi_select)
+      if not err:
+        (name, lat, lon) = msg
+        st.session_state.name = name
+        st.session_state.lat = str(lat)
+        st.session_state.lon = str(lon)
 
-      # call map component and watch for return values
-      coordinates = map_component(key='map')
-      if coordinates:
-        lat = lat_input.text_input('Select Latitude', value=coordinates[0])
-        lon = lon_input.text_input('Select Longitude', value=coordinates[1])
+    def on_checkbox():
+      st.session_state['inputs_disabled'] = not st.session_state.is_custom
+      st.session_state.allow_click = st.session_state.is_custom
+
+    def on_latlon():
+      pass
+      # print('on latlon')
+
+    def on_name():
+      pass
+      # print('on name')
+
+    # preset poi selectbox
+    st.selectbox('Preset Location', poi_list, key='poi_select', on_change=on_select)
+
+    # checkbox to switch between preset and custom location
+    st.checkbox('Custom location (Click on the map and enter a name)', key='is_custom', on_change=on_checkbox)
+
+    # define the form via st.empty() first, so you can update it later more easily
+    col_name, col_lat, col_lon = st.columns(3)
+    with col_name:
+      name_container = st.empty()
+    with col_lat:
+      lat_container = st.empty()
+    with col_lon:
+      lon_container = st.empty()
+
+    # inputs for name, lat & lon
+    custom_name = name_container.text_input('Name (required)', key='name', disabled=st.session_state.inputs_disabled, on_change=on_name)
+    lat = lat_container.text_input('Latitude (required)', key='lat', disabled=st.session_state.inputs_disabled, on_change=on_latlon)
+    lon = lon_container.text_input('Longitude (required)', key='lon', disabled=st.session_state.inputs_disabled, on_change=on_latlon)
+
+    # call map component and watch for return values
+    # if we already have coordinates, use them to display a marker
+    payload = { 'lat': lat, 'lon': lon, 'is_custom': st.session_state.allow_click }
+    map_component(payload=payload, key='map')
+    # if map component returns coordinates
+    # we update the input fields
+    if st.session_state.map != 'init':
+      # update name field only if current name is in preset
+      # defaults to 'Custom'
+      if self.is_name_in_preset(st.session_state.name) or st.session_state.name == '':
+        custom_name = name_container.text_input('Name (required)', key='name', value='Custom', disabled=st.session_state.inputs_disabled, on_change=on_name)
+      # update the lat, lon inputs with the new values from the map click
+      (map_lat, map_lon) = st.session_state.map
+      lat = lat_container.text_input('Latitude (required)', key='lat', value=map_lat, disabled=st.session_state.inputs_disabled, on_change=on_latlon)
+      lon = lon_container.text_input('Longitude (required)', key='lon', value=map_lon, disabled=st.session_state.inputs_disabled, on_change=on_latlon)
+
 
     # date picker for start & end date (form element)
     today = datetime.date.today()
     lastweek = (today - datetime.timedelta(days=7))
     col_start_date, col_end_date = st.columns(2)
     with col_start_date:
-      start_date = st.date_input('Start Date', lastweek)
+      start_date = st.date_input('Start Date', value=lastweek, key='start_date')
     with col_end_date:
-      end_date = st.date_input('End Date', today)
+      end_date = st.date_input('End Date', value=today, key='end_date')
     # format the dates and set class variables
     start_date = start_date.isoformat()
     end_date = end_date.isoformat()
 
-    if custom_name != '' and lat != '' and lon != '':
-      self.create_poi('custom', custom_name, start_date, end_date, lat, lon)
-    elif preset_name != None and preset_name != '---':
-      self.create_poi('preset', preset_name, start_date, end_date)
-    else:
-      st.error('Choose a location first!')
+    # gather all data
+    (err, msg) = self.generate_poi(st.session_state)
+    if (err):
+      st.error(msg)
       st.stop()
-
-    if self.poi:
-      st.markdown(f"<div class='st-ae st-af st-ag st-ah st-ai st-aj st-ak st-al st-am st-b8 st-ao st-ap st-aq st-ar st-as st-at st-au st-av st-aw st-ax st-ay st-az st-b9 st-b1 st-b2 st-b3 st-b4 st-b5 st-b6' style='flex-direction: column;'><h6>Location: {self.poi['name']}</h6>Coordinates: [{self.poi['lat']}, {self.poi['lon']}]<br />Timespan: {self.poi['start_date']} - {self.poi['end_date']}</div><br />", unsafe_allow_html=True)
+    else:
+      st.markdown(f"<div class='st-ae st-af st-ag st-ah st-ai st-aj st-ak st-al st-am st-b8 st-ao st-ap st-aq st-ar st-as st-at st-au st-av st-aw st-ax st-ay st-az st-b9 st-b1 st-b2 st-b3 st-b4 st-b5 st-b6' style='flex-direction: column;'><h6>Location: {st.session_state.name}</h6>Coordinates: [{st.session_state.lat}, {st.session_state.lon}]<br />Timespan: {st.session_state.start_date} - {st.session_state.end_date}</div><br />", unsafe_allow_html=True)
 
       # on submit
       if st.button('Generate SAR Timeseries'):
+        pass
         self.generate()
 
 
