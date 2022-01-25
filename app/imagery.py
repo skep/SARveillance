@@ -76,6 +76,7 @@ class Imagery():
     minVH = minmax.getNumber("VH_min").getInfo()
     maxVH_VV = minmax.getNumber("VH-VV_max").getInfo()
     minVH_VV = minmax.getNumber("VH-VV_min").getInfo()
+    print(maxVV, maxVH, maxVH_VV)
     w = 0.4
     h = 0.4
     region = [self.poi['lon']+w, self.poi['lat']-h, self.poi['lon']-w, self.poi['lat']+h]
