@@ -5,11 +5,12 @@ from datetime import date, datetime, timedelta
 
 import ee
 import geemap as gee
-# import matplotlib.pyplot as plt
-# import requests
-# from geemap.cartoee import (add_gridlines, add_north_arrow, add_scale_bar_lite,
-                            # get_map, get_image_collection_gif)
-
+import matplotlib.pyplot as plt
+import requests
+from geemap.cartoee import (add_gridlines, add_north_arrow, add_scale_bar_lite,
+                            get_map, get_image_collection_gif, pad_view)
+import pprint
+import cartopy.crs as ccrs
 
 class Sar():
   '''
@@ -62,7 +63,34 @@ class Sar():
 
     print('-> Set Region')
     self.setRegion()
-    # return
+
+    s2 = self.s2()
+    s1 = self.s1()
+
+    out_img = os.path.join('D:/workspace/python/SARveillance/downloads', 'final.png')
+    fig = plt.figure(figsize=(10, 10))
+    fig.patch.set_alpha(0.3)
+
+    ax = get_map(s2['image'], vis_params=s2['visParams'])
+    add_gridlines(ax, interval=(0.02, 0.02), linestyle=":")
+
+    bx = get_map(s1['image'], vis_params=s1['visParams'])
+    bx.patch.set_alpha(0.3)
+    add_gridlines(bx, interval=(0.02, 0.02), linestyle=":")
+
+    # ax.set_title(label='Test', fontsize=15)
+    fig.add_subplot(ax)
+    fig.add_subplot(bx)
+
+    plt.savefig(fname=out_img, dpi=100, transparent=True)
+    plt.clf()
+    plt.close()
+
+
+
+
+    # self.s1_urban_s2()
+    return
 
     print('-> Load Collection')
     collection = self.loadCollection()
@@ -98,6 +126,149 @@ class Sar():
 
 
   ###########################################################
+  ###########################################################
+  ###########################################################
+  ###########################################################
+  ###########################################################
+
+  def s2(self):
+
+    def maskS2clouds(image):
+      qa = image.select('QA60')
+      # Bits 10 and 11 are clouds and cirrus, respectively.
+      cloudBitMask = 1 << 10
+      cirrusBitMask = 1 << 11
+      # Both flags should be set to zero, indicating clear conditions.
+      mask = qa.bitwiseAnd(cloudBitMask).eq(0) \
+        .And(qa.bitwiseAnd(cirrusBitMask).eq(0))
+
+      return image.updateMask(mask).divide(10000)
+
+    def clip(image):
+      return image.clip(aoi)
+
+
+    # load S2 data
+    aoi = self.region
+    s2 = ee.ImageCollection('COPERNICUS/S2_SR') \
+      .filterBounds(aoi) \
+      .filterDate("2017-03-28", "2022-01-1") \
+      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',5)) \
+      .sort('CLOUDY_PIXEL_PERCENTAGE', False) \
+      .map(maskS2clouds) \
+      .select(['B4', 'B3', 'B2'])
+
+    s2 = s2.map(clip)
+
+    image = s2.first()
+    visParams = {
+      'bands': ['B4', 'B3', 'B2'],
+      'min': 0,
+      'max': 1,
+      'dimensions': 1000,
+      'region': self.region,
+      # 'crs': "EPSG:32637",
+      # 'crs': "EPSG:4326",
+      # 'crs': 'EPSG:3857',
+      'format': 'png',
+      'gamma': 2.0
+    }
+
+    name = image.get('system:index').getInfo()
+    print(name)
+    print(image.get('system:bands').getInfo())
+    name = f'000_{name}.png'
+    name = 's2.png'
+    out_img = os.path.join('D:/workspace/python/SARveillance/downloads', name)
+
+    # Size plot
+    fig = plt.figure(figsize=(10, 10))
+    projection = None
+    ax = get_map(image, vis_params=visParams, proj=projection)
+    # pad_view(ax)
+    add_gridlines(ax, interval=(0.02, 0.02), linestyle=":")
+    ax.set_title(label='Test', fontsize=15)
+    plt.savefig(fname=out_img, dpi=100)
+    plt.clf()
+    plt.close()
+
+    return {
+      'image': image,
+      'visParams': visParams,
+      'out_img': out_img
+    }
+
+
+
+  def s1(self):
+
+    def clip(image):
+      return image.clip(aoi)
+
+
+    # load S1 data
+    aoi = self.region
+    s1 = ee.ImageCollection('COPERNICUS/S1_GRD_FLOAT') \
+      .filterBounds(aoi) \
+      .filterDate("2017-03-28", "2022-01-1") \
+      .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')) \
+      .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH')) \
+      .filter(ee.Filter.eq('instrumentMode', 'IW')) \
+      .select(['VV', 'VH'])
+
+    def _urban_mode(image):
+      vh55 = image.expression("5.5 * VH > 0.5", { 'VH': image.select('VH')}).rename('VH55')
+      vh8 = image.expression("8.0 * VH", { 'VH': image.select('VH')}).rename('VH8')
+      return image.addBands([vh55, vh8])
+    
+    s1 = s1.map(_urban_mode)
+    s1 = s1.select(['VH55', 'VV', 'VH8'])
+    s1 = s1.map(clip)
+
+    image = s1.first()
+    visParams = {
+      'bands': ['VH55', 'VV', 'VH8'],
+      'dimensions': 500,
+      # 'crs': "EPSG:32637",
+      'opacity': 0.7,
+      'gamma': 1.5,
+    }
+
+    name = image.get('system:index').getInfo()
+    print(name)
+    print(image.get('system:bands').getInfo())
+    name = f'000_{name}.png'
+    name = 's1.png'
+    out_img = os.path.join('D:/workspace/python/SARveillance/downloads', name)
+
+    # Size plot
+    fig = plt.figure(figsize=(10, 10))
+    ax = get_map(image, vis_params=visParams)
+    # pad_view(ax)
+    add_gridlines(ax, interval=(0.02, 0.02), linestyle=":")
+    ax.set_title(label='Test', fontsize=15)
+    plt.savefig(fname=out_img, dpi=100)
+    plt.clf()
+    plt.close()
+
+    return {
+      'image': image,
+      'visParams': visParams,
+      'out_img': out_img
+    }
+
+
+
+
+  ###########################################################
+  ###########################################################
+  ###########################################################
+  ###########################################################
+  ###########################################################
+
+
+
+
 
   def setRegion(self):
     (lat, lon) = self.coordinates
