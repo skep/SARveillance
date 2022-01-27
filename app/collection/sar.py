@@ -12,7 +12,8 @@ from geemap.cartoee import (add_gridlines, add_north_arrow, add_scale_bar_lite,
 import pprint
 import cartopy.crs as ccrs
 from PIL import Image
-import cv2
+# import cv2
+import numpy as np
 
 
 class Sar():
@@ -45,7 +46,7 @@ class Sar():
 
         # default start/end date
         today = date.today()
-        last_week = today - timedelta(days=2)
+        last_week = today - timedelta(days=5)
         # set start/end date
         self.start_date = last_week if end_date is None else end_date
         self.end_date = today if start_date is None else start_date
@@ -67,12 +68,12 @@ class Sar():
         self.setRegion()
 
         s2 = self.s2()
-        # self.download_images(s2)
+        self.download_images(s2)
         s1 = self.s1()
-        # self.download_images(s1)
+        self.download_images(s1)
         # merge test
-        # self.merge_images(s1, s2)
-        self.fix(s1)
+        self.merge_images(s1, s2)
+        # self.fix(s1)
 
         # out_img = os.path.join('D:/workspace/python/SARveillance/downloads', 'final.png')
         # fig = plt.figure(figsize=(10, 10))
@@ -134,13 +135,30 @@ class Sar():
     ###########################################################
     ###########################################################
 
-    def fix(self, s1):
-        ip = s1['images'][0]['outPath']
-        image = cv2.imread(ip, 0)
-        image = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                      cv2.THRESH_BINARY, 17, -6)
-        cv2.imwrite(
-            'C:/Users/solschner/workspace-dev/python/Sarveillance2/downloads/fix.png', image)
+    # def fix(self, s1):
+    #     ip = s1['images'][0]['outPath']
+    #     image = cv2.imread(ip, 0)
+    #     image = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    #                                   cv2.THRESH_BINARY, 17, -6)
+    #     cv2.imwrite(
+    #         'C:/Users/solschner/workspace-dev/python/Sarveillance2/downloads/fix.png', image)
+
+    def color_to_alpha(self, im, alpha_color):
+      alpha = np.max(
+          [
+              np.abs(im[..., 0] - alpha_color[0]),
+              np.abs(im[..., 1] - alpha_color[1]),
+              np.abs(im[..., 2] - alpha_color[2]),
+          ],
+          axis=0,
+      )
+      ny, nx, _ = im.shape
+      im_rgba = np.zeros((ny, nx, 4), dtype=im.dtype)
+      for i in range(3):
+          im_rgba[..., i] = im[..., i]
+      im_rgba[..., 3] = alpha
+      return im_rgba
+
 
     def merge_images(self, s1, s2):
         basePath = s2['images'][0]['outPath']
@@ -148,18 +166,30 @@ class Sar():
         # baseImage = baseImage.convert("RGBA")
         print(basePath)
         imageSize = baseImage.size
-        outFolder = os.path.join(os.getcwd(), 'Downloads')
+        outFolder = os.path.join(os.getcwd(), 'Downloads', self.name)
         for i, image in enumerate(s1['images']):
             s1Path = image['outPath']
-            s1Image = Image.open(s1Path)
-            s1Image = s1Image.convert("RGBA")
-            # new_image = Image.new(
-            #     'RGBA', (imageSize[0], imageSize[1]), (0, 0, 0, 1))
-            # new_image.paste(baseImage, (0, 0))
-            # new_image.paste(s1Image, (0, 0))
-            imageName = f's1_{str(i).zfill(3)}_merged.png'
+            date = image['date']
+
+            s1Image = Image.open(s1Path).convert("RGBA")
+
+            # black to transparent
+            bg_color=(0,0,0)
+            array = np.array(s1Image, dtype=np.ubyte)
+            mask = (array[:,:,:3] == bg_color).all(axis=2)
+            alpha = np.where(mask, 0, 255)
+            array[:,:,-1] = alpha
+            Image.fromarray(np.ubyte(array)).save(s1Path, "PNG")
+            # test
+            # target_color = [0, 0, 0]
+            # im_rgba = self.color_to_alpha(s1Image, target_color)
+            # im_rgba.save(s1Path, "PNG")
+
+
+            s1Image = Image.open(s1Path).convert("RGBA")
+            imageName = f's1_{str(i).zfill(3)}_{date}.png'
+            print(imageName)
             outPath = os.path.join(outFolder, imageName)
-            # new_image.save(outPath, format="png")
             x = Image.alpha_composite(
                 Image.new("RGBA", baseImage.size), baseImage.convert('RGBA'))
             x.paste(s1Image, (0, 0), s1Image)
@@ -176,7 +206,7 @@ class Sar():
         for data in imageData['images']:
             image = data['image']
             outPath = data['outPath']
-            plt.figure(figsize=(8, 8), dpi=80)
+            plt.figure(figsize=(10, 10), dpi=100)
             ax = get_map(image, region=region, vis_params=visParams)
             # plt.savefig("filename.png", transparent=True)
             plt.savefig(fname=outPath, transparent=True)
@@ -222,7 +252,7 @@ class Sar():
             'bands': ['B4', 'B3', 'B2'],
             'min': 0,
             'max': 1,
-            'dimensions': [750, 750],
+            'dimensions': [1000, 1000],
             'region': self.region,
             'format': 'png',
             'gamma': 2.0
@@ -238,7 +268,9 @@ class Sar():
         # we already have it sorted by cloud cover, so we take the first
         image = s2.first()
         imageName = 's2.png'
-        outFolder = os.path.join(os.getcwd(), 'Downloads')
+        outFolder = os.path.join(os.getcwd(), 'Downloads', self.name)
+        if not os.path.exists(outFolder):
+          os.makedirs(outFolder)
         outPath = os.path.join(outFolder, imageName)
         # add image to imageData
         imageData['images'].append({
@@ -274,19 +306,24 @@ class Sar():
             vh8 = image.select('VH').multiply(8).rename('VH8')
             return image.addBands([vh55, vh8])
 
-        s1 = s1.map(_urban_mode)
-        s1 = s1.select(['VH55', 'VV', 'VH8'])
+        def _urban_transparent_mode(image):
+          r = image.expression("(VH > 0.1) ? 1 : 0", { 'VH': image.select('VH')}).rename('R')
+          # vh8 = image.expression("VH > 0.1", { 'VH': image.select('VH')}).rename('VH8')
+          g = image.expression("(VV > 0.3) ? 1 : 0", { 'VV': image.select('VV')}).rename('G')
+          b = image.expression("(VH > 0.2) ? 1 : 0", { 'VH': image.select('VH')}).rename('B')
+          return image.addBands([r,g,b])
+
+        # s1 = s1.map(_urban_mode)
+        s1 = s1.map(_urban_transparent_mode)
+        s1 = s1.select(['R', 'G', 'B', 'VV', 'VH'])
         s1 = s1.map(clip)
 
         # image = s1.first()
         visParams = {
-            'bands': ['VH55', 'VV', 'VH8'],
-            # 'dimensions': [750, 750],
-            # 'crs': 'EPSG:32637'
+            'bands': ['R', 'G', 'B'],
             'crs': "EPSG:4326",
             'region': self.region,
-            # 'crs': "EPSG:32637",
-            'opacity': 0.8,
+            'opacity': 1,
             # 'min': 0,
             # 'max': 1,
             'format': 'png',
@@ -308,32 +345,20 @@ class Sar():
         }
         for i, date in enumerate(dates):
             image = ee.Image(images.get(i))
-            imageName = f's1_{str(i).zfill(3)}.png'
-            outFolder = os.path.join(os.getcwd(), 'Downloads')
+            imageName = f's1_{str(i).zfill(3)}_{date}.png'
+            outFolder = os.path.join(os.getcwd(), 'Downloads', self.name)
+            if not os.path.exists(outFolder):
+              os.makedirs(outFolder)
             outPath = os.path.join(outFolder, imageName)
             imageData['images'].append({
                 'image': image,
-                'outPath': outPath
+                'outPath': outPath,
+                'date': date
             })
 
         # return all data
         return imageData
 
-        # Size plot
-        # fig = plt.figure(figsize=(10, 10))
-        # ax = get_map(image, vis_params=visParams)
-        # # pad_view(ax)
-        # add_gridlines(ax, interval=(0.02, 0.02), linestyle=":")
-        # ax.set_title(label='Test', fontsize=15)
-        # plt.savefig(fname=out_img, dpi=100)
-        # plt.clf()
-        # plt.close()
-
-        # return {
-        #     'image': image,
-        #     'visParams': visParams,
-        #     'outPath': outPath
-        # }
 
     ###########################################################
     ###########################################################
