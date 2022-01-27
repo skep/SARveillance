@@ -69,10 +69,10 @@ class Sar():
 
         s2 = self.s2()
         self.download_images(s2)
-        s1 = self.s1()
-        self.download_images(s1)
+        # s1 = self.s1()
+        # self.download_images(s1)
         # merge test
-        self.merge_images(s1, s2)
+        # self.merge_images(s1, s2)
         # self.fix(s1)
 
         # out_img = os.path.join('D:/workspace/python/SARveillance/downloads', 'final.png')
@@ -220,6 +220,8 @@ class Sar():
         #                     region=self.region, file_per_band=False)
 #
 
+
+
     def s2(self):
 
         def maskS2clouds(image):
@@ -237,15 +239,26 @@ class Sar():
             return image.clip(aoi)
 
         # load S2 data
+
         aoi = self.region
-        s2 = ee.ImageCollection('COPERNICUS/S2_SR') \
+        # s2 = ee.ImageCollection('COPERNICUS/S2_SR') \
+        #     .filterBounds(aoi) \
+        #     .filterDate("2021-10-27", "2022-01-27") \
+        #     .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10)) \
+        #     .sort('CLOUDY_PIXEL_PERCENTAGE', False) \
+        #     .map(maskS2clouds) \
+        #     .select(['B4', 'B3', 'B2']) \
+        #     .map(clip)
+
+        s2 = ee.ImageCollection('COPERNICUS/S2') \
             .filterBounds(aoi) \
-            .filterDate("2017-03-28", "2022-01-1") \
-            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5)) \
-            .sort('CLOUDY_PIXEL_PERCENTAGE', False) \
-            .map(maskS2clouds) \
+            .filterDate('2021-10-27','2022-01-27') \
+            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10)) \
             .select(['B4', 'B3', 'B2']) \
-            .map(clip)
+            .map(lambda image: image.clip(aoi)) \
+
+        count = int(s2.size().getInfo())
+        print(f'Count: {count}')
 
         # set vis params
         visParams = {
@@ -253,7 +266,7 @@ class Sar():
             'min': 0,
             'max': 1,
             'dimensions': [1000, 1000],
-            'region': self.region,
+            'region': aoi,
             'format': 'png',
             'gamma': 2.0
         }
