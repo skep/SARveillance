@@ -1,6 +1,5 @@
 from collection.sar import Sar
-from collection.sar2 import sar
-from collector.cartoee import Collector
+from collector.sar_urban import SAR_URBAN
 import geemap as gee
 
 
@@ -25,9 +24,9 @@ pois = [
   ('SUPPORT',49.30922,31.25083),
 ]
 
-(name, lat, lon) = pois[13]
+(name, lat, lon) = pois[14]
 
 
-# sar = Sar(name=name, coordinates=(lat,lon))
-# sar.run()
-sar(name=name, coordinates=(lat,lon))
+sar_urban = SAR_URBAN(name=name, coordinates=(lat,lon))
+sar_urban.run()
+
