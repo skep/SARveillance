@@ -1,5 +1,6 @@
 import ee 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from matplotlib.patches import Rectangle
 
 
 def create_point_buffer_region(coordinates, meter=3000):
@@ -38,8 +39,24 @@ def recent_date_range(days=90, format='%Y-%m-%d'):
   date_from is <today> minus <days> days
   '''
   date_to = date.today()
-  date_from = (date_to - timedelta(days=days)).strftime(format)
-  date_to = date_to.strftime(format)
+  date_from = (date_to - timedelta(days=days)).strftime('%Y-%m-%dT00:00:00')
+  date_to = date_to.strftime('%Y-%m-%dT23:59:59')
   return date_from, date_to
 
+def fix_date_range(date_from, date_to):
+  # first convert string to datetime obj
+  date_from = datetime.strptime(date_from, "%Y-%m-%d")
+  date_to = datetime.strptime(date_to, "%Y-%m-%d")
+  # set times
+  date_from = date_from.strftime('%Y-%m-%dT00:00:00')
+  date_to = date_to.strftime('%Y-%m-%dT23:59:59')
+  return date_from, date_to
+
+
+def create_progressbar_reactangle(region_eswn, color='white', percentage=100):
+    # Create a Rectangle patch
+  [e,s,w,n] = region_eswn
+  reactangle_width = abs(e-w) / 100 * percentage
+  reactangle_height = 0.005 # depends on the r-value of create_point_eswm_region()
+  return Rectangle((w,s),reactangle_width,reactangle_height,color=color,zorder=10)
 
